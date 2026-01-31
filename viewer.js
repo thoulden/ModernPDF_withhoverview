@@ -127,6 +127,14 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = isExtension
               service.navigateTo(destVal);
             }
           });
+
+          // Add hover preview handlers
+          element.addEventListener('mouseenter', (ev) => {
+            handleLinkMouseEnter(element, ev);
+          });
+          element.addEventListener('mouseleave', () => {
+            handleLinkMouseLeave(element);
+          });
         }
       },
       goToDestination(dest) {
@@ -151,6 +159,226 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = isExtension
         this.goToDestination(dest);
       }
     };
+
+    // ===========================================
+    // Link Hover Preview Feature
+    // ===========================================
+    let linkPreviewTooltip = null;
+    let linkPreviewCanvas = null;
+    let linkPreviewCtx = null;
+    let linkPreviewTimeout = null;
+    let currentPreviewElement = null;
+
+    // Preview dimensions (in CSS pixels)
+    const PREVIEW_WIDTH = 400;
+    const PREVIEW_HEIGHT = 250;
+    const PREVIEW_DELAY_MS = 200;
+
+    // Purpose: Creates the tooltip element for link hover previews
+    function ensureLinkPreviewTooltip() {
+      if (linkPreviewTooltip) return linkPreviewTooltip;
+
+      linkPreviewTooltip = document.createElement('div');
+      linkPreviewTooltip.className = 'link-preview-tooltip';
+      document.body.appendChild(linkPreviewTooltip);
+
+      return linkPreviewTooltip;
+    }
+
+    // Purpose: Hides the link preview tooltip
+    function hideLinkPreview() {
+      if (linkPreviewTimeout) {
+        clearTimeout(linkPreviewTimeout);
+        linkPreviewTimeout = null;
+      }
+      currentPreviewElement = null;
+      if (linkPreviewTooltip) {
+        linkPreviewTooltip.classList.remove('visible');
+        linkPreviewTooltip.classList.remove('external-link');
+      }
+    }
+
+    // Purpose: Shows external link URL in tooltip
+    function showExternalLinkPreview(url, linkRect) {
+      const tooltip = ensureLinkPreviewTooltip();
+      tooltip.innerHTML = '';
+      tooltip.classList.add('external-link');
+      tooltip.textContent = url;
+      positionTooltip(tooltip, linkRect);
+      tooltip.classList.add('visible');
+    }
+
+    // Purpose: Positions the tooltip near the link but within viewport
+    function positionTooltip(tooltip, linkRect) {
+      // First make it visible but transparent to measure
+      tooltip.style.visibility = 'hidden';
+      tooltip.style.display = 'block';
+
+      const tooltipRect = tooltip.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+
+      // Default: position below and slightly to the right of the link
+      let left = linkRect.left;
+      let top = linkRect.bottom + 8;
+
+      // If tooltip goes off right edge, align to right edge of link
+      if (left + tooltipRect.width > viewportWidth - 10) {
+        left = viewportWidth - tooltipRect.width - 10;
+      }
+
+      // If tooltip goes off bottom, show above the link
+      if (top + tooltipRect.height > viewportHeight - 10) {
+        top = linkRect.top - tooltipRect.height - 8;
+      }
+
+      // Ensure not off left edge
+      if (left < 10) left = 10;
+
+      // Ensure not off top edge
+      if (top < 10) top = 10;
+
+      tooltip.style.left = `${left}px`;
+      tooltip.style.top = `${top}px`;
+      tooltip.style.visibility = '';
+    }
+
+    // Purpose: Renders a preview of an internal link destination
+    async function showInternalLinkPreview(dest, linkRect) {
+      if (!pdfDoc) return;
+
+      const tooltip = ensureLinkPreviewTooltip();
+      tooltip.classList.remove('external-link');
+
+      // Show loading state
+      tooltip.innerHTML = '<div class="link-preview-loading">Loading preview...</div>';
+      positionTooltip(tooltip, linkRect);
+      tooltip.classList.add('visible');
+
+      try {
+        // Resolve the destination to get page number and coordinates
+        let explicitDest = dest;
+        if (typeof dest === 'string') {
+          explicitDest = await pdfDoc.getDestination(dest);
+          if (!explicitDest) {
+            tooltip.innerHTML = '<div class="link-preview-loading">Could not resolve destination</div>';
+            return;
+          }
+        }
+
+        // explicitDest format: [pageRef, type, ...params]
+        // type can be: XYZ, Fit, FitH, FitV, FitR, FitB, FitBH, FitBV
+        const ref = explicitDest[0];
+        const pageIndex = await pdfDoc.getPageIndex(ref);
+        const pageNum = pageIndex + 1;
+
+        // Get the page
+        const page = await pdfDoc.getPage(pageNum);
+        const baseViewport = page.getViewport({ scale: 1 });
+
+        // Parse destination coordinates (if XYZ type)
+        let destY = null;
+        const destType = explicitDest[1]?.name || explicitDest[1];
+        if (destType === 'XYZ' && explicitDest.length >= 4) {
+          // XYZ format: [ref, {name: 'XYZ'}, left, top, zoom]
+          destY = explicitDest[3]; // top coordinate in PDF units
+        } else if (destType === 'FitH' && explicitDest.length >= 3) {
+          destY = explicitDest[2];
+        }
+
+        // Calculate scale to fit preview width
+        const previewScale = PREVIEW_WIDTH / baseViewport.width;
+        const viewport = page.getViewport({ scale: previewScale });
+
+        // Determine the Y offset for the preview region
+        let yOffset = 0;
+        if (destY !== null && destY !== undefined) {
+          // Convert PDF coordinates (bottom-left origin) to canvas (top-left origin)
+          const pdfY = destY;
+          const canvasY = viewport.height - (pdfY * previewScale);
+          // Center the destination point in the preview, but not too high
+          yOffset = Math.max(0, canvasY - PREVIEW_HEIGHT / 4);
+          yOffset = Math.min(yOffset, Math.max(0, viewport.height - PREVIEW_HEIGHT));
+        }
+
+        // Create canvas for preview
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const previewDpr = window.devicePixelRatio || 1;
+
+        canvas.width = PREVIEW_WIDTH * previewDpr;
+        canvas.height = PREVIEW_HEIGHT * previewDpr;
+        canvas.style.width = `${PREVIEW_WIDTH}px`;
+        canvas.style.height = `${PREVIEW_HEIGHT}px`;
+
+        // Clear and set white background
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Scale for DPR and translate to show the relevant region
+        ctx.scale(previewDpr, previewDpr);
+        ctx.translate(0, -yOffset);
+
+        // Render the page
+        await page.render({
+          canvasContext: ctx,
+          viewport: viewport,
+          annotationMode: pdfjsLib?.AnnotationMode?.DISABLE || 0
+        }).promise;
+
+        // Check if we're still showing this preview
+        if (!linkPreviewTooltip.classList.contains('visible')) return;
+
+        // Update tooltip with rendered canvas
+        tooltip.innerHTML = '';
+        tooltip.appendChild(canvas);
+        positionTooltip(tooltip, linkRect);
+
+      } catch (err) {
+        console.warn('Failed to render link preview:', err);
+        tooltip.innerHTML = '<div class="link-preview-loading">Preview unavailable</div>';
+      }
+    }
+
+    // Purpose: Handles mouseenter on a link element
+    function handleLinkMouseEnter(element, event) {
+      const externalUrl = element.dataset.pdfExternalUrl;
+      const destJson = element.dataset.pdfDest;
+
+      // Clear any pending hide
+      if (linkPreviewTimeout) {
+        clearTimeout(linkPreviewTimeout);
+        linkPreviewTimeout = null;
+      }
+
+      currentPreviewElement = element;
+      const linkRect = element.getBoundingClientRect();
+
+      // Delay before showing preview to avoid flickering on quick mouse movements
+      linkPreviewTimeout = setTimeout(() => {
+        if (currentPreviewElement !== element) return;
+
+        if (externalUrl) {
+          showExternalLinkPreview(externalUrl, linkRect);
+        } else if (destJson) {
+          let dest;
+          try {
+            dest = JSON.parse(destJson);
+          } catch (_) {
+            dest = destJson;
+          }
+          showInternalLinkPreview(dest, linkRect);
+        }
+      }, PREVIEW_DELAY_MS);
+    }
+
+    // Purpose: Handles mouseleave on a link element
+    function handleLinkMouseLeave(element) {
+      if (currentPreviewElement === element) {
+        hideLinkPreview();
+      }
+    }
+
     let loadErrorBanner = document.getElementById('loadErrorBanner');
     let loadErrorMessage = document.getElementById('loadErrorMessage');
     let loadErrorCopy = document.getElementById('loadErrorCopy');
