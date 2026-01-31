@@ -251,6 +251,14 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = isExtension
       return false;
     }
 
+    // Purpose: Extracts citation key from destination name
+    function extractCitationKey(dest) {
+      if (typeof dest !== 'string') return null;
+      // Remove common prefixes
+      let key = dest.replace(/^(cite\.|cite:|bib\.)/i, '');
+      return key;
+    }
+
     // Purpose: Extracts citation text from the destination location
     async function showCitationPreview(dest, linkRect, explicitDest) {
       const tooltip = ensureLinkPreviewTooltip();
@@ -273,85 +281,109 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = isExtension
         const pageNum = pageIndex + 1;
         const page = await pdfDoc.getPage(pageNum);
 
-        // Get destination Y coordinate
-        const destTypeObj = explicitDest[1];
-        const destType = destTypeObj?.name || destTypeObj;
-        let destY = null;
-
-        if (destType === 'XYZ') {
-          destY = explicitDest[3];
-        } else if (destType === 'FitH' || destType === 'FitBH') {
-          destY = explicitDest[2];
-        }
-
         // Get text content from the page
         const textContent = await page.getTextContent();
-        const viewport = page.getViewport({ scale: 1 });
 
-        // Find text items near the destination Y coordinate
-        // PDF Y is from bottom, so we need to find items where (viewport.height - item.transform[5]) is close to our target
-        let citationText = '';
+        // Extract citation key for searching
+        const citationKey = extractCitationKey(dest);
+        console.log('[LinkPreview] Citation key:', citationKey);
 
-        if (destY !== null) {
-          // Sort items by Y position (top to bottom in reading order)
-          const sortedItems = textContent.items
-            .filter(item => item.str && item.str.trim())
-            .map(item => ({
-              str: item.str,
-              y: item.transform[5], // Y position in PDF coordinates
-              x: item.transform[4]  // X position
-            }))
-            .sort((a, b) => {
-              // Sort by Y descending (top to bottom), then X ascending
-              if (Math.abs(a.y - b.y) > 5) return b.y - a.y;
-              return a.x - b.x;
-            });
+        // Build full text with position info
+        const textItems = textContent.items
+          .filter(item => item.str && item.str.trim())
+          .map(item => ({
+            str: item.str,
+            y: item.transform[5],
+            x: item.transform[4]
+          }))
+          .sort((a, b) => {
+            // Sort by Y descending (top to bottom), then X ascending
+            if (Math.abs(a.y - b.y) > 5) return b.y - a.y;
+            return a.x - b.x;
+          });
 
-          // Find items starting from the destination Y (with some tolerance)
-          const tolerance = 20;
-          let capturing = false;
-          let capturedLines = [];
-          let currentLine = [];
-          let lastY = null;
+        // Group into lines
+        let lines = [];
+        let currentLine = [];
+        let lastY = null;
 
-          for (const item of sortedItems) {
-            // Start capturing when we reach the destination area
-            if (!capturing && item.y <= destY + tolerance && item.y >= destY - 100) {
-              capturing = true;
-            }
-
-            if (capturing) {
-              // Group by line (items with similar Y)
-              if (lastY !== null && Math.abs(item.y - lastY) > 8) {
-                if (currentLine.length > 0) {
-                  capturedLines.push(currentLine.join(' '));
-                  currentLine = [];
-                }
-                // Stop after capturing enough lines (typically a citation is 2-5 lines)
-                if (capturedLines.length >= 6) break;
-              }
-
-              currentLine.push(item.str);
-              lastY = item.y;
+        for (const item of textItems) {
+          if (lastY !== null && Math.abs(item.y - lastY) > 8) {
+            if (currentLine.length > 0) {
+              lines.push({ text: currentLine.map(i => i.str).join(' '), y: lastY, items: currentLine });
+              currentLine = [];
             }
           }
-
-          // Add final line
-          if (currentLine.length > 0) {
-            capturedLines.push(currentLine.join(' '));
-          }
-
-          citationText = capturedLines.join(' ').trim();
-
-          // Clean up common issues
-          citationText = citationText
-            .replace(/\s+/g, ' ')           // Normalize whitespace
-            .replace(/- /g, '')              // Remove hyphenation
-            .trim();
+          currentLine.push(item);
+          lastY = item.y;
+        }
+        if (currentLine.length > 0) {
+          lines.push({ text: currentLine.map(i => i.str).join(' '), y: lastY, items: currentLine });
         }
 
+        // Search for the citation by key
+        // Try different search strategies
+        let citationText = '';
+        let foundLineIndex = -1;
+
+        // Strategy 1: Look for the citation key directly (e.g., "altman2025gentle" or parts of it)
+        const keyParts = citationKey.match(/([a-zA-Z]+)(\d{4})([a-zA-Z]*)/);
+        let searchTerms = [citationKey];
+        if (keyParts) {
+          // Add author name + year as search term (e.g., "Altman" and "2025")
+          searchTerms.push(keyParts[1]); // author
+          searchTerms.push(keyParts[2]); // year
+        }
+
+        console.log('[LinkPreview] Search terms:', searchTerms);
+
+        // Search through lines for matching content
+        for (let i = 0; i < lines.length; i++) {
+          const lineText = lines[i].text.toLowerCase();
+
+          // Check if this line contains author name and year close together
+          if (keyParts) {
+            const authorMatch = lineText.includes(keyParts[1].toLowerCase());
+            const yearMatch = lineText.includes(keyParts[2]);
+
+            if (authorMatch && yearMatch) {
+              foundLineIndex = i;
+              console.log('[LinkPreview] Found citation at line:', i, lines[i].text);
+              break;
+            }
+          }
+
+          // Fallback: check for exact key match
+          if (lineText.includes(citationKey.toLowerCase())) {
+            foundLineIndex = i;
+            break;
+          }
+        }
+
+        // If found, capture this line and following lines (citations often span multiple lines)
+        if (foundLineIndex !== -1) {
+          const captureLines = [];
+          for (let i = foundLineIndex; i < Math.min(foundLineIndex + 5, lines.length); i++) {
+            captureLines.push(lines[i].text);
+
+            // Stop if we hit what looks like the next citation (starts with [ or author name pattern)
+            if (i > foundLineIndex && lines[i].text.match(/^\s*\[?\d+\]?\s*[A-Z][a-z]+/)) {
+              break;
+            }
+          }
+          citationText = captureLines.join(' ');
+        }
+
+        // Clean up
+        citationText = citationText
+          .replace(/\s+/g, ' ')
+          .replace(/- /g, '')
+          .trim();
+
+        console.log('[LinkPreview] Extracted citation:', citationText.substring(0, 100) + '...');
+
         if (!citationText) {
-          tooltip.innerHTML = '<div class="link-preview-loading">Could not extract citation text</div>';
+          tooltip.innerHTML = '<div class="link-preview-loading">Could not find citation text</div>';
           return;
         }
 
@@ -461,7 +493,101 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = isExtension
           console.log('[LinkPreview] FitV - no Y coordinate');
         } else {
           // Fit, FitB - show whole page
-          console.log('[LinkPreview] Fit type:', destType, '- showing from top');
+          console.log('[LinkPreview] Fit type:', destType, '- will search for target text');
+        }
+
+        // If no Y coordinate, try to find it by searching for the destination name in page text
+        if (destY === null && typeof dest === 'string') {
+          console.log('[LinkPreview] Searching for target text from destination:', dest);
+
+          // Parse destination name to get search term
+          // Common patterns: figure.1, equation.49, section.3, table.2, theorem.1
+          const destLower = dest.toLowerCase();
+          let searchPattern = null;
+
+          if (destLower.match(/^(figure|fig)\./)) {
+            const num = dest.split('.').pop();
+            searchPattern = new RegExp(`(Figure|Fig\\.?)\\s*${num}\\b`, 'i');
+          } else if (destLower.match(/^(equation|eq)\./)) {
+            const num = dest.split('.').pop();
+            // Equations often appear as (1), (49), etc.
+            searchPattern = new RegExp(`(Equation|Eq\\.?|\\()\\s*${num}[\\)\\b]`, 'i');
+          } else if (destLower.match(/^(section|sec)\./)) {
+            const num = dest.split('.').pop();
+            searchPattern = new RegExp(`(Section|Sec\\.?)\\s*${num}\\b`, 'i');
+          } else if (destLower.match(/^(table|tab)\./)) {
+            const num = dest.split('.').pop();
+            searchPattern = new RegExp(`(Table|Tab\\.?)\\s*${num}\\b`, 'i');
+          } else if (destLower.match(/^(theorem|thm)\./)) {
+            const num = dest.split('.').pop();
+            searchPattern = new RegExp(`(Theorem|Thm\\.?)\\s*${num}\\b`, 'i');
+          } else if (destLower.match(/^(lemma|lem)\./)) {
+            const num = dest.split('.').pop();
+            searchPattern = new RegExp(`(Lemma|Lem\\.?)\\s*${num}\\b`, 'i');
+          } else if (destLower.match(/^(definition|def)\./)) {
+            const num = dest.split('.').pop();
+            searchPattern = new RegExp(`(Definition|Def\\.?)\\s*${num}\\b`, 'i');
+          } else if (destLower.match(/^(proposition|prop)\./)) {
+            const num = dest.split('.').pop();
+            searchPattern = new RegExp(`(Proposition|Prop\\.?)\\s*${num}\\b`, 'i');
+          } else if (destLower.match(/^(corollary|cor)\./)) {
+            const num = dest.split('.').pop();
+            searchPattern = new RegExp(`(Corollary|Cor\\.?)\\s*${num}\\b`, 'i');
+          } else if (destLower.match(/^(appendix|app)\./)) {
+            const id = dest.split('.').pop();
+            searchPattern = new RegExp(`(Appendix|App\\.?)\\s*${id}\\b`, 'i');
+          }
+
+          if (searchPattern) {
+            console.log('[LinkPreview] Search pattern:', searchPattern);
+
+            // Get text content and search
+            const textContent = await page.getTextContent();
+            const textItems = textContent.items
+              .filter(item => item.str && item.str.trim())
+              .map(item => ({
+                str: item.str,
+                y: item.transform[5],
+                x: item.transform[4]
+              }));
+
+            // Search for the pattern
+            for (const item of textItems) {
+              if (searchPattern.test(item.str)) {
+                destY = item.y;
+                console.log('[LinkPreview] Found target text:', item.str, 'at Y:', destY);
+                break;
+              }
+            }
+
+            // If not found in single items, try combining nearby items (text might be split)
+            if (destY === null) {
+              // Sort by position and combine nearby items
+              textItems.sort((a, b) => {
+                if (Math.abs(a.y - b.y) > 5) return b.y - a.y;
+                return a.x - b.x;
+              });
+
+              let currentLine = '';
+              let lineY = null;
+              for (const item of textItems) {
+                if (lineY !== null && Math.abs(item.y - lineY) > 5) {
+                  if (searchPattern.test(currentLine)) {
+                    destY = lineY;
+                    console.log('[LinkPreview] Found target in combined line:', currentLine, 'at Y:', destY);
+                    break;
+                  }
+                  currentLine = '';
+                }
+                currentLine += ' ' + item.str;
+                lineY = item.y;
+              }
+              // Check last line
+              if (destY === null && searchPattern.test(currentLine)) {
+                destY = lineY;
+              }
+            }
+          }
         }
 
         // Calculate scale to fit preview width
