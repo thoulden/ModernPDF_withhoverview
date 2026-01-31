@@ -369,9 +369,6 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = isExtension
 
     // Purpose: Handles mouseenter on a link element
     function handleLinkMouseEnter(element, event) {
-      const externalUrl = element.dataset.pdfExternalUrl;
-      const destJson = element.dataset.pdfDest;
-
       // Clear any pending hide
       if (linkPreviewTimeout) {
         clearTimeout(linkPreviewTimeout);
@@ -385,19 +382,18 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = isExtension
       linkPreviewTimeout = setTimeout(() => {
         if (currentPreviewElement !== element) return;
 
-        if (externalUrl) {
-          showExternalLinkPreview(externalUrl, linkRect);
-        } else if (destJson) {
-          let dest;
-          try {
-            dest = JSON.parse(destJson);
-          } catch (_) {
-            dest = destJson;
-          }
-          console.log('[LinkPreview] Internal link destination:', dest);
-          showInternalLinkPreview(dest, linkRect);
-        } else {
+        const linkInfo = getLinkDestination(element);
+        if (!linkInfo) {
           console.log('[LinkPreview] No destination found on element:', element);
+          return;
+        }
+
+        console.log('[LinkPreview] Link info:', linkInfo);
+
+        if (linkInfo.type === 'external') {
+          showExternalLinkPreview(linkInfo.url, linkRect);
+        } else if (linkInfo.type === 'internal') {
+          showInternalLinkPreview(linkInfo.dest, linkRect);
         }
       }, PREVIEW_DELAY_MS);
     }
@@ -407,6 +403,52 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = isExtension
       if (currentPreviewElement === element) {
         hideLinkPreview();
       }
+    }
+
+    // Purpose: Attaches hover handlers to all link annotations in a slot
+    function attachLinkHoverHandlers(slot) {
+      if (!slot.pdfLayer) return;
+
+      const links = slot.pdfLayer.querySelectorAll('.linkAnnotation a');
+      links.forEach(link => {
+        // Skip if already bound
+        if (link.dataset.hoverBound) return;
+        link.dataset.hoverBound = '1';
+
+        link.addEventListener('mouseenter', (ev) => {
+          handleLinkMouseEnter(link, ev);
+        });
+        link.addEventListener('mouseleave', () => {
+          handleLinkMouseLeave(link);
+        });
+      });
+    }
+
+    // Purpose: Extracts destination info from a link element
+    function getLinkDestination(link) {
+      // Check if we already have tagged data (from addLinkAttributes)
+      if (link.dataset.pdfExternalUrl) {
+        return { type: 'external', url: link.dataset.pdfExternalUrl };
+      }
+      if (link.dataset.pdfDest) {
+        try {
+          return { type: 'internal', dest: JSON.parse(link.dataset.pdfDest) };
+        } catch (_) {
+          return { type: 'internal', dest: link.dataset.pdfDest };
+        }
+      }
+
+      // For links created directly by PDF.js, check the href
+      const href = link.getAttribute('href');
+      if (!href) return null;
+
+      // External links start with http://, https://, or other protocols
+      if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
+        return { type: 'external', url: href };
+      }
+
+      // Internal link - href is the destination name
+      return { type: 'internal', dest: href };
     }
 
     let loadErrorBanner = document.getElementById('loadErrorBanner');
@@ -1149,6 +1191,8 @@ function goToPageNumber(n){
         }
         if (slot.pdfRenderToken === renderToken) {
           slot.pdfAnnotationLayer = layer;
+          // Attach hover handlers to link annotations
+          attachLinkHoverHandlers(slot);
         }
       } catch (err) {
         if (!(err && err.name === 'RenderingCancelledException')) {
