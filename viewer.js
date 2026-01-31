@@ -243,22 +243,148 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = isExtension
       tooltip.style.visibility = '';
     }
 
+    // Purpose: Checks if a destination is a citation reference
+    function isCitationDestination(dest) {
+      if (typeof dest === 'string') {
+        return dest.startsWith('cite.') || dest.startsWith('cite:') || dest.match(/^bib\./i);
+      }
+      return false;
+    }
+
+    // Purpose: Extracts citation text from the destination location
+    async function showCitationPreview(dest, linkRect, explicitDest) {
+      const tooltip = ensureLinkPreviewTooltip();
+      tooltip.classList.remove('external-link');
+      tooltip.classList.add('citation-preview');
+
+      try {
+        // Get page reference
+        const ref = explicitDest[0];
+        let pageIndex;
+        if (typeof ref === 'number') {
+          pageIndex = ref;
+        } else if (ref && typeof ref === 'object') {
+          pageIndex = await pdfDoc.getPageIndex(ref);
+        } else {
+          tooltip.innerHTML = '<div class="link-preview-loading">Could not resolve citation</div>';
+          return;
+        }
+
+        const pageNum = pageIndex + 1;
+        const page = await pdfDoc.getPage(pageNum);
+
+        // Get destination Y coordinate
+        const destTypeObj = explicitDest[1];
+        const destType = destTypeObj?.name || destTypeObj;
+        let destY = null;
+
+        if (destType === 'XYZ') {
+          destY = explicitDest[3];
+        } else if (destType === 'FitH' || destType === 'FitBH') {
+          destY = explicitDest[2];
+        }
+
+        // Get text content from the page
+        const textContent = await page.getTextContent();
+        const viewport = page.getViewport({ scale: 1 });
+
+        // Find text items near the destination Y coordinate
+        // PDF Y is from bottom, so we need to find items where (viewport.height - item.transform[5]) is close to our target
+        let citationText = '';
+
+        if (destY !== null) {
+          // Sort items by Y position (top to bottom in reading order)
+          const sortedItems = textContent.items
+            .filter(item => item.str && item.str.trim())
+            .map(item => ({
+              str: item.str,
+              y: item.transform[5], // Y position in PDF coordinates
+              x: item.transform[4]  // X position
+            }))
+            .sort((a, b) => {
+              // Sort by Y descending (top to bottom), then X ascending
+              if (Math.abs(a.y - b.y) > 5) return b.y - a.y;
+              return a.x - b.x;
+            });
+
+          // Find items starting from the destination Y (with some tolerance)
+          const tolerance = 20;
+          let capturing = false;
+          let capturedLines = [];
+          let currentLine = [];
+          let lastY = null;
+
+          for (const item of sortedItems) {
+            // Start capturing when we reach the destination area
+            if (!capturing && item.y <= destY + tolerance && item.y >= destY - 100) {
+              capturing = true;
+            }
+
+            if (capturing) {
+              // Group by line (items with similar Y)
+              if (lastY !== null && Math.abs(item.y - lastY) > 8) {
+                if (currentLine.length > 0) {
+                  capturedLines.push(currentLine.join(' '));
+                  currentLine = [];
+                }
+                // Stop after capturing enough lines (typically a citation is 2-5 lines)
+                if (capturedLines.length >= 6) break;
+              }
+
+              currentLine.push(item.str);
+              lastY = item.y;
+            }
+          }
+
+          // Add final line
+          if (currentLine.length > 0) {
+            capturedLines.push(currentLine.join(' '));
+          }
+
+          citationText = capturedLines.join(' ').trim();
+
+          // Clean up common issues
+          citationText = citationText
+            .replace(/\s+/g, ' ')           // Normalize whitespace
+            .replace(/- /g, '')              // Remove hyphenation
+            .trim();
+        }
+
+        if (!citationText) {
+          tooltip.innerHTML = '<div class="link-preview-loading">Could not extract citation text</div>';
+          return;
+        }
+
+        // Display citation text
+        tooltip.innerHTML = `<p class="citation-text">${citationText}</p>`;
+        positionTooltip(tooltip, linkRect);
+
+      } catch (err) {
+        console.warn('Failed to extract citation:', err);
+        tooltip.innerHTML = '<div class="link-preview-loading">Citation preview unavailable</div>';
+      }
+    }
+
     // Purpose: Renders a preview of an internal link destination
     async function showInternalLinkPreview(dest, linkRect) {
       if (!pdfDoc) return;
 
       const tooltip = ensureLinkPreviewTooltip();
       tooltip.classList.remove('external-link');
+      tooltip.classList.remove('citation-preview');
 
       // Show loading state
       tooltip.innerHTML = '<div class="link-preview-loading">Loading preview...</div>';
       positionTooltip(tooltip, linkRect);
       tooltip.classList.add('visible');
 
+      // Check if this is a citation
+      const isCitation = isCitationDestination(dest);
+
       try {
         // Resolve the destination to get page number and coordinates
         let explicitDest = dest;
-        console.log('[LinkPreview] Raw destination:', dest, 'Type:', typeof dest, 'IsArray:', Array.isArray(dest));
+        console.log('[LinkPreview] Raw destination:', dest, 'Type:', typeof dest, 'IsArray:', Array.isArray(dest), 'IsCitation:', isCitation);
 
         // If dest is a string (named destination), resolve it
         if (typeof dest === 'string') {
@@ -278,12 +404,21 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = isExtension
           return;
         }
 
+        // Handle citations specially - extract text instead of rendering canvas
+        if (isCitation) {
+          console.log('[LinkPreview] Handling as citation');
+          await showCitationPreview(dest, linkRect, explicitDest);
+          return;
+        }
+
         console.log('[LinkPreview] Explicit destination array:', explicitDest);
 
         // explicitDest format: [pageRef, type, ...params]
         // type can be: XYZ, Fit, FitH, FitV, FitR, FitB, FitBH, FitBV
         const ref = explicitDest[0];
-        console.log('[LinkPreview] Page ref:', ref, 'Type:', typeof ref);
+        const destTypeObj = explicitDest[1];
+        const destType = destTypeObj?.name || destTypeObj;
+        console.log('[LinkPreview] Page ref:', ref, 'Type:', typeof ref, 'DestType:', destType, 'Full dest:', JSON.stringify(explicitDest));
 
         // Get page index - handle both direct page numbers and ref objects
         let pageIndex;
@@ -303,14 +438,30 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = isExtension
         const page = await pdfDoc.getPage(pageNum);
         const baseViewport = page.getViewport({ scale: 1 });
 
-        // Parse destination coordinates (if XYZ type)
+        // Parse destination coordinates based on destination type
         let destY = null;
-        const destType = explicitDest[1]?.name || explicitDest[1];
-        if (destType === 'XYZ' && explicitDest.length >= 4) {
+        let destX = null;
+
+        if (destType === 'XYZ') {
           // XYZ format: [ref, {name: 'XYZ'}, left, top, zoom]
-          destY = explicitDest[3]; // top coordinate in PDF units
-        } else if (destType === 'FitH' && explicitDest.length >= 3) {
+          destX = explicitDest[2];
+          destY = explicitDest[3];
+          console.log('[LinkPreview] XYZ coords - X:', destX, 'Y:', destY);
+        } else if (destType === 'FitH' || destType === 'FitBH') {
+          // FitH format: [ref, {name: 'FitH'}, top]
           destY = explicitDest[2];
+          console.log('[LinkPreview] FitH coord - Y:', destY);
+        } else if (destType === 'FitR') {
+          // FitR format: [ref, {name: 'FitR'}, left, bottom, right, top]
+          destY = explicitDest[5]; // top
+          console.log('[LinkPreview] FitR coord - Y:', destY);
+        } else if (destType === 'FitV' || destType === 'FitBV') {
+          // FitV format: [ref, {name: 'FitV'}, left]
+          // No Y coordinate, show from top
+          console.log('[LinkPreview] FitV - no Y coordinate');
+        } else {
+          // Fit, FitB - show whole page
+          console.log('[LinkPreview] Fit type:', destType, '- showing from top');
         }
 
         // Calculate scale to fit preview width
@@ -320,12 +471,20 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = isExtension
         // Determine the Y offset for the preview region
         let yOffset = 0;
         if (destY !== null && destY !== undefined) {
-          // Convert PDF coordinates (bottom-left origin) to canvas (top-left origin)
-          const pdfY = destY;
-          const canvasY = viewport.height - (pdfY * previewScale);
-          // Center the destination point in the preview, but not too high
-          yOffset = Math.max(0, canvasY - PREVIEW_HEIGHT / 4);
+          // PDF coordinates have origin at bottom-left, canvas has origin at top-left
+          // destY is distance from bottom of page in PDF units
+          // We need to convert to distance from top of page in scaled canvas units
+          const pageHeightPdf = baseViewport.height / 1; // height in PDF units at scale 1
+          const canvasY = (pageHeightPdf - destY) * previewScale;
+
+          console.log('[LinkPreview] Y calculation - pageHeight:', pageHeightPdf, 'destY:', destY, 'canvasY:', canvasY);
+
+          // Position so the destination is near the top of the preview (with small margin)
+          yOffset = Math.max(0, canvasY - 30);
+          // Don't go past the bottom of the page
           yOffset = Math.min(yOffset, Math.max(0, viewport.height - PREVIEW_HEIGHT));
+
+          console.log('[LinkPreview] Final yOffset:', yOffset);
         }
 
         // Create canvas for preview
