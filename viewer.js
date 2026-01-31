@@ -2254,6 +2254,111 @@ function goToPageNumber(n){
     let prePresScale = null;
     let prePresPage = null;
 
+    function presentationNextPage() {
+      if (!pdfDoc || !presentationMode) return;
+      if (currentPageIndex < pdfDoc.numPages - 1) {
+        currentPageIndex++;
+        showPresentationPage();
+      }
+    }
+
+    function presentationPrevPage() {
+      if (!pdfDoc || !presentationMode) return;
+      if (currentPageIndex > 0) {
+        currentPageIndex--;
+        showPresentationPage();
+      }
+    }
+
+    function showPresentationPage() {
+      if (!pdfDoc || !presentationMode) return;
+
+      // Remove active class from all pages
+      document.querySelectorAll('.page.presentation-active').forEach(el => {
+        el.classList.remove('presentation-active');
+      });
+
+      const page = pages[currentPageIndex];
+      if (!page || !page.baseH) {
+        // Page not loaded yet, render it
+        renderWindowAroundCurrent();
+        // Try again after render
+        setTimeout(() => showPresentationPage(), 50);
+        return;
+      }
+
+      // Calculate scale to fit page to viewport
+      const viewportHeight = window.innerHeight;
+      const viewportWidth = window.innerWidth;
+      const pageAspect = page.baseW / page.baseH;
+      const viewportAspect = viewportWidth / viewportHeight;
+
+      let newScale;
+      if (pageAspect > viewportAspect) {
+        // Page is wider, fit to width
+        newScale = (viewportWidth * 0.98) / page.baseW;
+      } else {
+        // Page is taller, fit to height
+        newScale = (viewportHeight * 0.98) / page.baseH;
+      }
+
+      currentScale = newScale;
+      renderWindowAroundCurrent();
+
+      // Add active class to current page
+      const pageEl = page.canvas?.parentElement;
+      if (pageEl) {
+        pageEl.classList.add('presentation-active');
+      }
+    }
+
+    function handlePresentationClick(e) {
+      if (!presentationMode) return;
+      // Don't advance if clicking on a link
+      if (e.target.closest('a')) return;
+      presentationNextPage();
+    }
+
+    function handlePresentationKeydown(e) {
+      if (!presentationMode) return;
+
+      switch (e.key) {
+        case 'ArrowRight':
+        case 'ArrowDown':
+        case ' ':
+        case 'PageDown':
+          e.preventDefault();
+          presentationNextPage();
+          break;
+        case 'ArrowLeft':
+        case 'ArrowUp':
+        case 'PageUp':
+          e.preventDefault();
+          presentationPrevPage();
+          break;
+        case 'Home':
+          e.preventDefault();
+          currentPageIndex = 0;
+          showPresentationPage();
+          break;
+        case 'End':
+          e.preventDefault();
+          if (pdfDoc) currentPageIndex = pdfDoc.numPages - 1;
+          showPresentationPage();
+          break;
+      }
+    }
+
+    function handlePresentationWheel(e) {
+      if (!presentationMode) return;
+      e.preventDefault();
+      if (e.deltaY > 0) {
+        presentationNextPage();
+      } else if (e.deltaY < 0) {
+        presentationPrevPage();
+      }
+    }
+
     function enterPresentationMode() {
       if (presentationMode) return;
       presentationMode = true;
@@ -2265,6 +2370,11 @@ function goToPageNumber(n){
       // Add presentation class to body
       document.body.classList.add('presentation-mode');
 
+      // Add event listeners for presentation navigation
+      document.addEventListener('click', handlePresentationClick);
+      document.addEventListener('keydown', handlePresentationKeydown, true);
+      document.addEventListener('wheel', handlePresentationWheel, { passive: false });
+
       // Request fullscreen
       const docEl = document.documentElement;
       if (docEl.requestFullscreen) {
@@ -2273,8 +2383,8 @@ function goToPageNumber(n){
         docEl.webkitRequestFullscreen();
       }
 
-      // Fit page to screen height
-      fitPresentationPage();
+      // Show current page fitted to screen
+      setTimeout(() => showPresentationPage(), 100);
     }
 
     function exitPresentationMode() {
@@ -2282,6 +2392,16 @@ function goToPageNumber(n){
       presentationMode = false;
 
       document.body.classList.remove('presentation-mode');
+
+      // Remove active class from all pages
+      document.querySelectorAll('.page.presentation-active').forEach(el => {
+        el.classList.remove('presentation-active');
+      });
+
+      // Remove event listeners
+      document.removeEventListener('click', handlePresentationClick);
+      document.removeEventListener('keydown', handlePresentationKeydown, true);
+      document.removeEventListener('wheel', handlePresentationWheel);
 
       // Exit fullscreen if still in it
       if (document.fullscreenElement || document.webkitFullscreenElement) {
@@ -2299,34 +2419,6 @@ function goToPageNumber(n){
       }
     }
 
-    function fitPresentationPage() {
-      if (!pdfDoc || !presentationMode) return;
-
-      const page = pages[currentPageIndex];
-      if (!page || !page.baseH) return;
-
-      // Calculate scale to fit page height to viewport
-      const viewportHeight = window.innerHeight;
-      const viewportWidth = window.innerWidth;
-      const pageAspect = page.baseW / page.baseH;
-      const viewportAspect = viewportWidth / viewportHeight;
-
-      let newScale;
-      if (pageAspect > viewportAspect) {
-        // Page is wider, fit to width
-        newScale = (viewportWidth * 0.95) / page.baseW;
-      } else {
-        // Page is taller, fit to height
-        newScale = (viewportHeight * 0.95) / page.baseH;
-      }
-
-      currentScale = newScale;
-      renderWindowAroundCurrent();
-
-      // Center the current page
-      goToPageNumber(currentPageIndex + 1);
-    }
-
     // Listen for fullscreen changes to exit presentation mode
     document.addEventListener('fullscreenchange', () => {
       if (!document.fullscreenElement && presentationMode) {
@@ -2342,7 +2434,7 @@ function goToPageNumber(n){
     // Handle window resize in presentation mode
     window.addEventListener('resize', () => {
       if (presentationMode) {
-        fitPresentationPage();
+        showPresentationPage();
       }
     });
 

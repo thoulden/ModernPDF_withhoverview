@@ -1121,6 +1121,7 @@
 /* Presentation Mode */
 .presentation-mode {
   background: #000 !important;
+  cursor: pointer;
 }
 
 .presentation-mode .header,
@@ -1150,13 +1151,23 @@
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
-  width: 100% !important;
-  height: 100% !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  overflow: hidden !important;
 }
 
 .presentation-mode .page {
-  margin: 0 auto !important;
+  position: absolute !important;
+  margin: 0 !important;
   box-shadow: none !important;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.presentation-mode .page.presentation-active {
+  opacity: 1;
+  pointer-events: auto;
 }
 </style>
 </head>
