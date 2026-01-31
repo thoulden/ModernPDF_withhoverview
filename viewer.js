@@ -198,16 +198,6 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = isExtension
       }
     }
 
-    // Purpose: Shows external link URL in tooltip
-    function showExternalLinkPreview(url, linkRect) {
-      const tooltip = ensureLinkPreviewTooltip();
-      tooltip.innerHTML = '';
-      tooltip.classList.add('external-link');
-      tooltip.textContent = url;
-      positionTooltip(tooltip, linkRect);
-      tooltip.classList.add('visible');
-    }
-
     // Purpose: Positions the tooltip near the link but within viewport
     function positionTooltip(tooltip, linkRect) {
       // First make it visible but transparent to measure
@@ -243,180 +233,22 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = isExtension
       tooltip.style.visibility = '';
     }
 
-    // Purpose: Checks if a destination is a citation reference
-    function isCitationDestination(dest) {
-      if (typeof dest === 'string') {
-        return dest.startsWith('cite.') || dest.startsWith('cite:') || dest.match(/^bib\./i);
-      }
-      return false;
-    }
-
-    // Purpose: Extracts citation key from destination name
-    function extractCitationKey(dest) {
-      if (typeof dest !== 'string') return null;
-      // Remove common prefixes
-      let key = dest.replace(/^(cite\.|cite:|bib\.)/i, '');
-      return key;
-    }
-
-    // Purpose: Extracts citation text from the destination location
-    async function showCitationPreview(dest, linkRect, explicitDest) {
-      const tooltip = ensureLinkPreviewTooltip();
-      tooltip.classList.remove('external-link');
-      tooltip.classList.add('citation-preview');
-
-      try {
-        // Get page reference
-        const ref = explicitDest[0];
-        let pageIndex;
-        if (typeof ref === 'number') {
-          pageIndex = ref;
-        } else if (ref && typeof ref === 'object') {
-          pageIndex = await pdfDoc.getPageIndex(ref);
-        } else {
-          tooltip.innerHTML = '<div class="link-preview-loading">Could not resolve citation</div>';
-          return;
-        }
-
-        const pageNum = pageIndex + 1;
-        const page = await pdfDoc.getPage(pageNum);
-
-        // Get text content from the page
-        const textContent = await page.getTextContent();
-
-        // Extract citation key for searching
-        const citationKey = extractCitationKey(dest);
-        console.log('[LinkPreview] Citation key:', citationKey);
-
-        // Build full text with position info
-        const textItems = textContent.items
-          .filter(item => item.str && item.str.trim())
-          .map(item => ({
-            str: item.str,
-            y: item.transform[5],
-            x: item.transform[4]
-          }))
-          .sort((a, b) => {
-            // Sort by Y descending (top to bottom), then X ascending
-            if (Math.abs(a.y - b.y) > 5) return b.y - a.y;
-            return a.x - b.x;
-          });
-
-        // Group into lines
-        let lines = [];
-        let currentLine = [];
-        let lastY = null;
-
-        for (const item of textItems) {
-          if (lastY !== null && Math.abs(item.y - lastY) > 8) {
-            if (currentLine.length > 0) {
-              lines.push({ text: currentLine.map(i => i.str).join(' '), y: lastY, items: currentLine });
-              currentLine = [];
-            }
-          }
-          currentLine.push(item);
-          lastY = item.y;
-        }
-        if (currentLine.length > 0) {
-          lines.push({ text: currentLine.map(i => i.str).join(' '), y: lastY, items: currentLine });
-        }
-
-        // Search for the citation by key
-        // Try different search strategies
-        let citationText = '';
-        let foundLineIndex = -1;
-
-        // Strategy 1: Look for the citation key directly (e.g., "altman2025gentle" or parts of it)
-        const keyParts = citationKey.match(/([a-zA-Z]+)(\d{4})([a-zA-Z]*)/);
-        let searchTerms = [citationKey];
-        if (keyParts) {
-          // Add author name + year as search term (e.g., "Altman" and "2025")
-          searchTerms.push(keyParts[1]); // author
-          searchTerms.push(keyParts[2]); // year
-        }
-
-        console.log('[LinkPreview] Search terms:', searchTerms);
-
-        // Search through lines for matching content
-        for (let i = 0; i < lines.length; i++) {
-          const lineText = lines[i].text.toLowerCase();
-
-          // Check if this line contains author name and year close together
-          if (keyParts) {
-            const authorMatch = lineText.includes(keyParts[1].toLowerCase());
-            const yearMatch = lineText.includes(keyParts[2]);
-
-            if (authorMatch && yearMatch) {
-              foundLineIndex = i;
-              console.log('[LinkPreview] Found citation at line:', i, lines[i].text);
-              break;
-            }
-          }
-
-          // Fallback: check for exact key match
-          if (lineText.includes(citationKey.toLowerCase())) {
-            foundLineIndex = i;
-            break;
-          }
-        }
-
-        // If found, capture this line and following lines (citations often span multiple lines)
-        if (foundLineIndex !== -1) {
-          const captureLines = [];
-          for (let i = foundLineIndex; i < Math.min(foundLineIndex + 5, lines.length); i++) {
-            captureLines.push(lines[i].text);
-
-            // Stop if we hit what looks like the next citation (starts with [ or author name pattern)
-            if (i > foundLineIndex && lines[i].text.match(/^\s*\[?\d+\]?\s*[A-Z][a-z]+/)) {
-              break;
-            }
-          }
-          citationText = captureLines.join(' ');
-        }
-
-        // Clean up
-        citationText = citationText
-          .replace(/\s+/g, ' ')
-          .replace(/- /g, '')
-          .trim();
-
-        console.log('[LinkPreview] Extracted citation:', citationText.substring(0, 100) + '...');
-
-        if (!citationText) {
-          tooltip.innerHTML = '<div class="link-preview-loading">Could not find citation text</div>';
-          return;
-        }
-
-        // Display citation text
-        tooltip.innerHTML = `<p class="citation-text">${citationText}</p>`;
-        positionTooltip(tooltip, linkRect);
-
-      } catch (err) {
-        console.warn('Failed to extract citation:', err);
-        tooltip.innerHTML = '<div class="link-preview-loading">Citation preview unavailable</div>';
-      }
-    }
-
     // Purpose: Renders a preview of an internal link destination
     async function showInternalLinkPreview(dest, linkRect) {
       if (!pdfDoc) return;
 
       const tooltip = ensureLinkPreviewTooltip();
       tooltip.classList.remove('external-link');
-      tooltip.classList.remove('citation-preview');
 
       // Show loading state
       tooltip.innerHTML = '<div class="link-preview-loading">Loading preview...</div>';
       positionTooltip(tooltip, linkRect);
       tooltip.classList.add('visible');
 
-      // Check if this is a citation
-      const isCitation = isCitationDestination(dest);
-
       try {
         // Resolve the destination to get page number and coordinates
         let explicitDest = dest;
-        console.log('[LinkPreview] Raw destination:', dest, 'Type:', typeof dest, 'IsArray:', Array.isArray(dest), 'IsCitation:', isCitation);
+        console.log('[LinkPreview] Raw destination:', dest, 'Type:', typeof dest, 'IsArray:', Array.isArray(dest));
 
         // If dest is a string (named destination), resolve it
         if (typeof dest === 'string') {
@@ -429,17 +261,9 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = isExtension
         }
 
         // If dest is already an array (explicit destination), use it directly
-        // But if it's a named destination that looks like an array, try to resolve
         if (!Array.isArray(explicitDest)) {
           console.log('[LinkPreview] Destination is not an array:', explicitDest);
           tooltip.innerHTML = '<div class="link-preview-loading">Invalid destination format</div>';
-          return;
-        }
-
-        // Handle citations specially - extract text instead of rendering canvas
-        if (isCitation) {
-          console.log('[LinkPreview] Handling as citation');
-          await showCitationPreview(dest, linkRect, explicitDest);
           return;
         }
 
@@ -668,18 +492,13 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = isExtension
         if (currentPreviewElement !== element) return;
 
         const linkInfo = getLinkDestination(element);
-        if (!linkInfo) {
-          console.log('[LinkPreview] No destination found on element:', element);
+        // Only show preview for internal links
+        if (!linkInfo || linkInfo.type !== 'internal') {
           return;
         }
 
         console.log('[LinkPreview] Link info:', linkInfo);
-
-        if (linkInfo.type === 'external') {
-          showExternalLinkPreview(linkInfo.url, linkRect);
-        } else if (linkInfo.type === 'internal') {
-          showInternalLinkPreview(linkInfo.dest, linkRect);
-        }
+        showInternalLinkPreview(linkInfo.dest, linkRect);
       }, PREVIEW_DELAY_MS);
     }
 
