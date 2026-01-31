@@ -258,18 +258,45 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = isExtension
       try {
         // Resolve the destination to get page number and coordinates
         let explicitDest = dest;
+        console.log('[LinkPreview] Raw destination:', dest, 'Type:', typeof dest, 'IsArray:', Array.isArray(dest));
+
+        // If dest is a string (named destination), resolve it
         if (typeof dest === 'string') {
           explicitDest = await pdfDoc.getDestination(dest);
+          console.log('[LinkPreview] Resolved named dest:', explicitDest);
           if (!explicitDest) {
             tooltip.innerHTML = '<div class="link-preview-loading">Could not resolve destination</div>';
             return;
           }
         }
 
+        // If dest is already an array (explicit destination), use it directly
+        // But if it's a named destination that looks like an array, try to resolve
+        if (!Array.isArray(explicitDest)) {
+          console.log('[LinkPreview] Destination is not an array:', explicitDest);
+          tooltip.innerHTML = '<div class="link-preview-loading">Invalid destination format</div>';
+          return;
+        }
+
+        console.log('[LinkPreview] Explicit destination array:', explicitDest);
+
         // explicitDest format: [pageRef, type, ...params]
         // type can be: XYZ, Fit, FitH, FitV, FitR, FitB, FitBH, FitBV
         const ref = explicitDest[0];
-        const pageIndex = await pdfDoc.getPageIndex(ref);
+        console.log('[LinkPreview] Page ref:', ref, 'Type:', typeof ref);
+
+        // Get page index - handle both direct page numbers and ref objects
+        let pageIndex;
+        if (typeof ref === 'number') {
+          pageIndex = ref;
+        } else if (ref && typeof ref === 'object') {
+          pageIndex = await pdfDoc.getPageIndex(ref);
+        } else {
+          console.log('[LinkPreview] Could not resolve page ref');
+          tooltip.innerHTML = '<div class="link-preview-loading">Could not resolve page</div>';
+          return;
+        }
+        console.log('[LinkPreview] Resolved page index:', pageIndex);
         const pageNum = pageIndex + 1;
 
         // Get the page
@@ -367,7 +394,10 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = isExtension
           } catch (_) {
             dest = destJson;
           }
+          console.log('[LinkPreview] Internal link destination:', dest);
           showInternalLinkPreview(dest, linkRect);
+        } else {
+          console.log('[LinkPreview] No destination found on element:', element);
         }
       }, PREVIEW_DELAY_MS);
     }
