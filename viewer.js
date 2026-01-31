@@ -801,6 +801,7 @@ const leftBar = document.getElementById('leftBar');
     const prevPageBtn = el('prevPageBtn'), nextPageBtn = el('nextPageBtn');
 
     const helpBtn = el('helpBtn'), helpModal = el('helpModal'), helpClose = el('helpClose');
+    const presentBtn = el('presentBtn');
 
     const textStylePanel = el('textStylePanel'),
           textFontFamily = el('textFontFamily'),
@@ -2246,6 +2247,113 @@ function goToPageNumber(n){
       helpModal.addEventListener('click', (e) => {
         if (e.target === helpModal) helpModal.classList.add('hidden');
       });
+    }
+
+    // Presentation mode
+    let presentationMode = false;
+    let prePresScale = null;
+    let prePresPage = null;
+
+    function enterPresentationMode() {
+      if (presentationMode) return;
+      presentationMode = true;
+
+      // Save current state
+      prePresScale = currentScale;
+      prePresPage = currentPageIndex;
+
+      // Add presentation class to body
+      document.body.classList.add('presentation-mode');
+
+      // Request fullscreen
+      const docEl = document.documentElement;
+      if (docEl.requestFullscreen) {
+        docEl.requestFullscreen();
+      } else if (docEl.webkitRequestFullscreen) {
+        docEl.webkitRequestFullscreen();
+      }
+
+      // Fit page to screen height
+      fitPresentationPage();
+    }
+
+    function exitPresentationMode() {
+      if (!presentationMode) return;
+      presentationMode = false;
+
+      document.body.classList.remove('presentation-mode');
+
+      // Exit fullscreen if still in it
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
+        if (document.exitFullscreen) {
+          document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+          document.webkitExitFullscreen();
+        }
+      }
+
+      // Restore previous scale
+      if (prePresScale !== null) {
+        currentScale = prePresScale;
+        renderWindowAroundCurrent();
+      }
+    }
+
+    function fitPresentationPage() {
+      if (!pdfDoc || !presentationMode) return;
+
+      const page = pages[currentPageIndex];
+      if (!page || !page.baseH) return;
+
+      // Calculate scale to fit page height to viewport
+      const viewportHeight = window.innerHeight;
+      const viewportWidth = window.innerWidth;
+      const pageAspect = page.baseW / page.baseH;
+      const viewportAspect = viewportWidth / viewportHeight;
+
+      let newScale;
+      if (pageAspect > viewportAspect) {
+        // Page is wider, fit to width
+        newScale = (viewportWidth * 0.95) / page.baseW;
+      } else {
+        // Page is taller, fit to height
+        newScale = (viewportHeight * 0.95) / page.baseH;
+      }
+
+      currentScale = newScale;
+      renderWindowAroundCurrent();
+
+      // Center the current page
+      goToPageNumber(currentPageIndex + 1);
+    }
+
+    // Listen for fullscreen changes to exit presentation mode
+    document.addEventListener('fullscreenchange', () => {
+      if (!document.fullscreenElement && presentationMode) {
+        exitPresentationMode();
+      }
+    });
+    document.addEventListener('webkitfullscreenchange', () => {
+      if (!document.webkitFullscreenElement && presentationMode) {
+        exitPresentationMode();
+      }
+    });
+
+    // Handle window resize in presentation mode
+    window.addEventListener('resize', () => {
+      if (presentationMode) {
+        fitPresentationPage();
+      }
+    });
+
+    if (presentBtn) {
+      presentBtn.onclick = () => {
+        if (presentationMode) {
+          exitPresentationMode();
+        } else {
+          enterPresentationMode();
+        }
+      };
     }
 
     searchInput.addEventListener('keydown', async (e) => {

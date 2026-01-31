@@ -2,7 +2,9 @@
 
 **This project is a fork of [Kevin Bryan's ModernPDF](https://github.com/kevincure/ModernPDF).** All credit for the core PDF viewer and annotation functionality goes to Kevin Bryan. You can find more of his projects at http://www.kevinbryanecon.com/tools.html.
 
-This fork adds **link hover preview** functionality: when you hover over internal links (like footnote references, equation citations, or cross-references), a preview of the destination content appears in a tooltip. For external links, the URL is displayed on hover.
+This fork adds:
+- **Link hover preview**: Hover over internal links (footnotes, equation references, cross-references) to see a rendered preview of the destination content
+- **Presentation mode**: Click the presentation button to enter fullscreen presentation mode
 
 ---
 
@@ -30,9 +32,13 @@ ModernPDF is an ultralightweight PDF reader that supports just enough annotation
 - You can click on the page number to jump to a page.
 - Ctrl-f jumps to the 'find' bar. Press enter to search.
 
-## Link Hover Preview (Fork Feature)
-- **Internal links** (footnotes, equation references, cross-references): Hover over any internal link to see a rendered preview of the destination content. This is useful for reading academic papers where you want to quickly glance at a footnote or equation without losing your place.
-- **External links**: Hover to see the full URL before clicking.
+## Fork Features
+
+### Link Hover Preview
+Hover over any internal link (footnotes, equation references, cross-references) to see a rendered preview of the destination content. This is useful for reading academic papers where you want to quickly glance at a footnote or equation without losing your place.
+
+### Presentation Mode
+Click the presentation button (bottom left) to enter fullscreen presentation mode. Pages are scaled to fit the screen. Press Escape or click the button again to exit.
 
 This is all deliberately minimal. Rendering is based on pdfjs.
 - Signatures are draggable and resizable once placed; use the corner handle or reopen the identity dialog to redraw them at any time.

@@ -1117,6 +1117,47 @@
 #printContainer {
   display: none;
 }
+
+/* Presentation Mode */
+.presentation-mode {
+  background: #000 !important;
+}
+
+.presentation-mode .header,
+.presentation-mode .load-error-banner,
+.presentation-mode .reader-hint,
+.presentation-mode #commentSidebar,
+.presentation-mode .help-modal,
+.presentation-mode .signature-modal,
+.presentation-mode #identityModal,
+.presentation-mode #zoomMenu {
+  display: none !important;
+}
+
+.presentation-mode .main {
+  position: fixed !important;
+  inset: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: #000 !important;
+  overflow: hidden !important;
+}
+
+.presentation-mode #pages {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.presentation-mode .page {
+  margin: 0 auto !important;
+  box-shadow: none !important;
+}
 </style>
 </head>
 
@@ -1160,6 +1201,9 @@
         </button>
         <button class="nav-btn icon-btn" id="saveBtn" title="Save PDF" disabled aria-label="Download PDF">
           <img src="icons/download.svg" class="icon-svg" alt="" aria-hidden="true">
+        </button>
+        <button class="nav-btn icon-btn" id="presentBtn" title="Presentation mode" aria-label="Presentation mode">
+          <img src="icons/presentation.svg" class="icon-svg" alt="" aria-hidden="true">
         </button>
       </div>
     </div>
