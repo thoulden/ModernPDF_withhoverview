@@ -2375,6 +2375,9 @@ function goToPageNumber(n){
       document.addEventListener('keydown', handlePresentationKeydown, true);
       document.addEventListener('wheel', handlePresentationWheel, { passive: false });
 
+      // Always start from the first page
+      currentPageIndex = 0;
+
       // Request fullscreen
       const docEl = document.documentElement;
       if (docEl.requestFullscreen) {
